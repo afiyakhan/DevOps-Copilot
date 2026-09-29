@@ -1,0 +1,3 @@
+package com.devopscopilot.mcp;
+import com.devopscopilot.model.LogAnalysisResponse; import com.devopscopilot.service.LogAnalysisService; import org.springframework.ai.mcp.annotation.McpTool; import org.springframework.ai.mcp.annotation.McpToolParam; import org.springframework.stereotype.Service;
+@Service public class DevOpsMcpTools { private final LogAnalysisService service; public DevOpsMcpTools(LogAnalysisService service){this.service=service;} @McpTool(name="analyze_incident",description="Analyzes an application log and returns probable root cause, severity, fix and summary.") public LogAnalysisResponse analyzeIncident(@McpToolParam(description="Application error or log",required=true) String log){return service.analyzeLog(log);} }
