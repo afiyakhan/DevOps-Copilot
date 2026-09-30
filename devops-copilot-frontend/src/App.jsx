@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useState } from "react";
 
 const sampleLogs = {
@@ -23,6 +24,10 @@ function App() {
   const [history, setHistory] = useState([]);
   const [copied, setCopied] = useState(false);
 
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatLoading, setChatLoading] = useState(false);
+
   useEffect(() => {
     const savedHistory = localStorage.getItem("devopsCopilotHistory");
 
@@ -42,10 +47,32 @@ function App() {
     );
   }, [history]);
 
-  const analyzeLog = async () => {
-    if (!log.trim()) {
+  const buildAssistantSummary = (data) => {
+    return (
+      "I analyzed the incident.\n\n" +
+      "Error: " +
+      data.errorType +
+      "\n" +
+      "Severity: " +
+      data.severity +
+      "\n\n" +
+      "Root cause: " +
+      data.possibleRootCause +
+      "\n\n" +
+      "Suggested fix: " +
+      data.suggestedFix
+    );
+  };
+
+  const analyzeLog = async (customLog) => {
+    const logToAnalyze =
+      customLog !== undefined && customLog !== null
+        ? customLog
+        : log;
+
+    if (!logToAnalyze || !logToAnalyze.trim()) {
       setError("Please enter an application log.");
-      return;
+      return null;
     }
 
     setLoading(true);
@@ -61,7 +88,9 @@ function App() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ log }),
+          body: JSON.stringify({
+            log: logToAnalyze,
+          }),
         }
       );
 
@@ -76,29 +105,47 @@ function App() {
       const historyItem = {
         id: Date.now(),
         date: new Date().toLocaleString(),
-        log: log,
+        log: logToAnalyze,
         result: data,
       };
 
-      setHistory((previous) => [
-        historyItem,
-        ...previous,
-      ]);
+      setHistory((previous) => {
+        return [historyItem, ...previous];
+      });
+
+      return data;
     } catch (err) {
       setError(
         "Unable to connect to DevOps Copilot. Make sure Spring Boot is running on port 8081."
       );
+
+      return null;
     } finally {
       setLoading(false);
     }
   };
 
-  const loadSample = (sampleName = "Database Timeout") => {
-    setLog(sampleLogs[sampleName]);
+  const loadSample = (sampleName) => {
+    const name = sampleName || "Database Timeout";
+    const selectedLog = sampleLogs[name];
+
+    setLog(selectedLog);
     setFileName("");
     setResult(null);
     setError("");
     setCopied(false);
+
+    setChatMessages([
+      {
+        role: "assistant",
+        text:
+          "I loaded the " +
+          name +
+          " incident.\n\n" +
+          "You can ask me to analyze it, explain the root cause, " +
+          "describe the impact, suggest a fix, or recommend prevention steps.",
+      },
+    ]);
   };
 
   const handleFileUpload = (event) => {
@@ -108,9 +155,11 @@ function App() {
       return;
     }
 
+    const lowerName = file.name.toLowerCase();
+
     if (
-      !file.name.toLowerCase().endsWith(".log") &&
-      !file.name.toLowerCase().endsWith(".txt")
+      !lowerName.endsWith(".log") &&
+      !lowerName.endsWith(".txt")
     ) {
       setError("Please upload a .log or .txt file.");
       return;
@@ -118,12 +167,25 @@ function App() {
 
     const reader = new FileReader();
 
-    reader.onload = (e) => {
-      setLog(e.target.result);
+    reader.onload = (eventObject) => {
+      const content = eventObject.target.result;
+
+      setLog(content);
       setFileName(file.name);
       setResult(null);
       setError("");
       setCopied(false);
+
+      setChatMessages([
+        {
+          role: "assistant",
+          text:
+            "I loaded " +
+            file.name +
+            ".\n\n" +
+            "Ask me to analyze the incident when you are ready.",
+        },
+      ]);
     };
 
     reader.onerror = () => {
@@ -145,6 +207,17 @@ function App() {
     setError("");
     setCopied(false);
 
+    setChatMessages([
+      {
+        role: "assistant",
+        text:
+          "I reopened the " +
+          (item.result?.errorType || "incident") +
+          " analysis.\n\n" +
+          "You can ask follow-up questions about this incident.",
+      },
+    ]);
+
     window.scrollTo({
       top: 0,
       behavior: "smooth",
@@ -156,53 +229,65 @@ function App() {
       return "";
     }
 
-    const troubleshooting =
-      result.troubleshootingSteps?.length > 0
-        ? result.troubleshootingSteps
-            .map((step, index) => `${index + 1}. ${step}`)
-            .join("\n")
-        : "No troubleshooting steps available.";
+    let troubleshooting = "No troubleshooting steps available.";
 
-    const prevention =
-      result.prevention?.length > 0
-        ? result.prevention
-            .map((item, index) => `${index + 1}. ${item}`)
-            .join("\n")
-        : "No prevention recommendations available.";
+    if (
+      result.troubleshootingSteps &&
+      result.troubleshootingSteps.length > 0
+    ) {
+      troubleshooting = result.troubleshootingSteps
+        .map((step, index) => {
+          return index + 1 + ". " + step;
+        })
+        .join("\n");
+    }
 
-    return `
-DEVOPS COPILOT - INCIDENT REPORT
+    let prevention = "No prevention recommendations available.";
 
-Error Type:
-${result.errorType}
+    if (
+      result.prevention &&
+      result.prevention.length > 0
+    ) {
+      prevention = result.prevention
+        .map((item, index) => {
+          return index + 1 + ". " + item;
+        })
+        .join("\n");
+    }
 
-Severity:
-${result.severity}
-
-Possible Root Cause:
-${result.possibleRootCause}
-
-Suggested Fix:
-${result.suggestedFix}
-
-Incident Summary:
-${result.incidentSummary}
-
-Troubleshooting Steps:
-${troubleshooting}
-
-Impact:
-${result.impact || "Not available"}
-
-Prevention:
-${prevention}
-
-Analysis Mode:
-${result.analysisMode || "LOCAL AI"}
-
-Original Log:
-${log}
-`.trim();
+    return [
+      "DEVOPS COPILOT - INCIDENT REPORT",
+      "",
+      "Error Type:",
+      result.errorType,
+      "",
+      "Severity:",
+      result.severity,
+      "",
+      "Possible Root Cause:",
+      result.possibleRootCause,
+      "",
+      "Suggested Fix:",
+      result.suggestedFix,
+      "",
+      "Incident Summary:",
+      result.incidentSummary,
+      "",
+      "Troubleshooting Steps:",
+      troubleshooting,
+      "",
+      "Impact:",
+      result.impact || "Not available",
+      "",
+      "Prevention:",
+      prevention,
+      "",
+      "Analysis Mode:",
+      result.analysisMode || "LOCAL AI",
+      "",
+      "Original Log:",
+      log,
+    ].join("\n");
   };
 
   const copyReport = async () => {
@@ -236,8 +321,8 @@ ${log}
     });
 
     const url = URL.createObjectURL(blob);
-
     const link = document.createElement("a");
+
     link.href = url;
     link.download = "devops-copilot-incident-report.txt";
 
@@ -262,22 +347,187 @@ ${log}
       ).toUpperCase();
 
       if (stats[severity] !== undefined) {
-        stats[severity]++;
+        stats[severity] = stats[severity] + 1;
       }
     });
 
     return stats;
   }, [history]);
 
-  const steps = result?.troubleshootingSteps || [];
+  const sendChatMessage = async (messageOverride) => {
+    const message =
+      messageOverride !== undefined && messageOverride !== null
+        ? messageOverride.trim()
+        : chatInput.trim();
 
+    if (!message) {
+      return;
+    }
+
+    setChatInput("");
+
+    setChatMessages((previous) => {
+      return [
+        ...previous,
+        {
+          role: "user",
+          text: message,
+        },
+      ];
+    });
+
+    if (!log || !log.trim()) {
+      setChatMessages((previous) => {
+        return [
+          ...previous,
+          {
+            role: "assistant",
+            text:
+              "Please paste or upload an application log first.\n\n" +
+              "Then I can analyze the incident and answer your questions.",
+          },
+        ];
+      });
+
+      return;
+    }
+
+    setChatLoading(true);
+    setError("");
+
+    const lower = message.toLowerCase();
+
+    try {
+      let currentResult = result;
+
+      if (!currentResult) {
+        currentResult = await analyzeLog(log);
+      }
+
+      if (!currentResult) {
+        throw new Error("Analysis failed.");
+      }
+
+      let responseText = "";
+
+      if (
+        lower.includes("root cause") ||
+        lower.includes("why")
+      ) {
+        responseText =
+          "The possible root cause is:\n\n" +
+          currentResult.possibleRootCause;
+      } else if (
+        lower.includes("impact") ||
+        lower.includes("affect")
+      ) {
+        responseText =
+          "The expected impact is:\n\n" +
+          currentResult.impact;
+      } else if (
+        lower.includes("fix") ||
+        lower.includes("solve") ||
+        lower.includes("troubleshoot") ||
+        lower.includes("solution")
+      ) {
+        const troubleshooting =
+          currentResult.troubleshootingSteps || [];
+
+        responseText =
+          "Suggested fix:\n\n" +
+          currentResult.suggestedFix +
+          "\n\n" +
+          "Troubleshooting steps:\n\n" +
+          troubleshooting
+            .map((step, index) => {
+              return index + 1 + ". " + step;
+            })
+            .join("\n");
+      } else if (
+        lower.includes("prevent") ||
+        lower.includes("future")
+      ) {
+        const prevention =
+          currentResult.prevention || [];
+
+        responseText =
+          "Prevention recommendations:\n\n" +
+          prevention
+            .map((item, index) => {
+              return index + 1 + ". " + item;
+            })
+            .join("\n");
+      } else if (
+        lower.includes("severity") ||
+        lower.includes("serious")
+      ) {
+        responseText =
+          "The detected severity is " +
+          currentResult.severity +
+          ".";
+      } else if (
+        lower.includes("summary") ||
+        lower.includes("summarize")
+      ) {
+        responseText =
+          "Incident summary:\n\n" +
+          currentResult.incidentSummary;
+      } else if (
+        lower.includes("analy") ||
+        lower.includes("incident") ||
+        lower.includes("error")
+      ) {
+        responseText =
+          buildAssistantSummary(currentResult);
+      } else {
+        responseText =
+          "I analyzed the current incident.\n\n" +
+          "Error: " +
+          currentResult.errorType +
+          "\n" +
+          "Severity: " +
+          currentResult.severity +
+          "\n\n" +
+          "You can ask me about the root cause, impact, " +
+          "suggested fix, troubleshooting steps, severity, " +
+          "summary, or prevention.";
+      }
+
+      setChatMessages((previous) => {
+        return [
+          ...previous,
+          {
+            role: "assistant",
+            text: responseText,
+          },
+        ];
+      });
+    } catch {
+      setChatMessages((previous) => {
+        return [
+          ...previous,
+          {
+            role: "assistant",
+            text:
+              "I could not complete the incident analysis.\n\n" +
+              "Please make sure Spring Boot and Ollama are running.",
+          },
+        ];
+      });
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const quickChat = (message) => {
+    sendChatMessage(message);
+  };
+
+  const steps = result?.troubleshootingSteps || [];
   const prevention = result?.prevention || [];
 
   return (
     <div className="page">
-
-      {/* ================= HEADER ================= */}
-
       <header className="hero">
         <div>
           <div className="badge">
@@ -289,9 +539,9 @@ ${log}
           </h1>
 
           <p>
-            Upload or paste an application log and get
-            AI-powered incident analysis, probable root
-            cause, severity, troubleshooting and prevention.
+            Analyze application incidents with local AI,
+            MCP-powered tooling and a conversational Alexa+
+            style experience.
           </p>
         </div>
 
@@ -302,21 +552,155 @@ ${log}
       </header>
 
       <main className="content">
+        <section className="panel alexa-panel">
+          <div className="alexa-header">
+            <div>
+              <div className="eyebrow">
+                CONVERSATIONAL INCIDENT ASSISTANT
+              </div>
 
-        {/* ================= ANALYZER ================= */}
+              <h2>
+                ✦ DevOps Copilot
+              </h2>
+
+              <p>
+                Alexa+ style conversational web experience
+                for incident investigation.
+              </p>
+            </div>
+
+            <div className="alexa-badge">
+              SIMULATED ALEXA+ EXPERIENCE
+            </div>
+          </div>
+
+          <div className="chat-window">
+            {chatMessages.length === 0 ? (
+              <div className="chat-empty">
+                <div className="chat-icon">
+                  ✦
+                </div>
+
+                <h3>
+                  How can I help with your incident?
+                </h3>
+
+                <p>
+                  Load or upload a log, then ask a
+                  question about the incident.
+                </p>
+              </div>
+            ) : (
+              chatMessages.map((message, index) => (
+                <div
+                  className={"chat-message " + message.role}
+                  key={index}
+                >
+                  <div className="chat-avatar">
+                    {message.role === "user" ? "U" : "✦"}
+                  </div>
+
+                  <div className="chat-bubble">
+                    {message.text}
+                  </div>
+                </div>
+              ))
+            )}
+
+            {chatLoading && (
+              <div className="chat-message assistant">
+                <div className="chat-avatar">
+                  ✦
+                </div>
+
+                <div className="chat-bubble typing">
+                  Analyzing incident...
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="quick-actions">
+            <button
+              className="quick-chip"
+              onClick={() =>
+                quickChat("Analyze this incident")
+              }
+            >
+              Analyze incident
+            </button>
+
+            <button
+              className="quick-chip"
+              onClick={() =>
+                quickChat("What is the root cause?")
+              }
+            >
+              Root cause
+            </button>
+
+            <button
+              className="quick-chip"
+              onClick={() =>
+                quickChat("What is the impact?")
+              }
+            >
+              Impact
+            </button>
+
+            <button
+              className="quick-chip"
+              onClick={() =>
+                quickChat("How do I fix this?")
+              }
+            >
+              Fix
+            </button>
+
+            <button
+              className="quick-chip"
+              onClick={() =>
+                quickChat("How can I prevent this?")
+              }
+            >
+              Prevention
+            </button>
+          </div>
+
+          <div className="chat-input-row">
+            <input
+              value={chatInput}
+              onChange={(event) =>
+                setChatInput(event.target.value)
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  sendChatMessage();
+                }
+              }}
+              placeholder="Ask about the incident..."
+            />
+
+            <button
+              className="primary chat-send"
+              onClick={() => sendChatMessage()}
+              disabled={chatLoading}
+            >
+              {chatLoading ? "..." : "Send"}
+            </button>
+          </div>
+        </section>
 
         <section className="panel">
-
           <div className="panel-title">
-
             <div>
               <h2>
                 Analyze Application Log
               </h2>
 
               <p>
-                Upload a .log/.txt file, paste an error,
-                or try one of the sample incidents.
+                Upload a .log/.txt file, paste an
+                error, or try a sample incident.
               </p>
             </div>
 
@@ -328,13 +712,9 @@ ${log}
             >
               Load Sample
             </button>
-
           </div>
 
-          {/* Sample buttons */}
-
           <div className="sample-area">
-
             <span className="sample-label">
               Sample Logs:
             </span>
@@ -352,15 +732,10 @@ ${log}
                 </button>
               )
             )}
-
           </div>
 
-          {/* Upload */}
-
           <div className="upload-area">
-
             <label className="upload-button">
-
               📁 Upload Log File
 
               <input
@@ -369,7 +744,6 @@ ${log}
                 onChange={handleFileUpload}
                 hidden
               />
-
             </label>
 
             {fileName && (
@@ -377,26 +751,21 @@ ${log}
                 Selected: {fileName}
               </span>
             )}
-
           </div>
-
-          {/* Log textarea */}
 
           <textarea
             value={log}
-            onChange={(e) => {
-              setLog(e.target.value);
+            onChange={(event) => {
+              setLog(event.target.value);
               setFileName("");
             }}
             placeholder="Paste your application error, stack trace, or service log here..."
             rows={12}
           />
 
-          {/* Analyze */}
-
           <button
             className="primary"
-            onClick={analyzeLog}
+            onClick={() => analyzeLog()}
             disabled={loading}
           >
             {loading
@@ -409,20 +778,12 @@ ${log}
               {error}
             </div>
           )}
-
         </section>
-
-        {/* ================= RESULT ================= */}
 
         {result && (
           <section className="panel result">
-
-            {/* Result Header */}
-
             <div className="result-header">
-
               <div>
-
                 <div className="eyebrow">
                   INCIDENT ANALYSIS
                 </div>
@@ -430,33 +791,32 @@ ${log}
                 <h2>
                   {result.errorType}
                 </h2>
-
               </div>
 
               <div
-                className={`severity ${String(
-                  result.severity || ""
-                ).toLowerCase()}`}
+                className={
+                  "severity " +
+                  String(result.severity || "").toLowerCase()
+                }
               >
                 {result.severity}
               </div>
-
             </div>
 
-            {/* ================= VISUAL ROOT CAUSE CHAIN ================= */}
-
             <div className="root-chain">
-
               <div className="chain-title">
                 Root Cause Analysis
               </div>
 
               <div className="chain">
-
                 <div className="chain-item">
                   <span>📄</span>
-                  <strong>Log</strong>
-                  <small>Detected incident</small>
+                  <strong>
+                    Log
+                  </strong>
+                  <small>
+                    Detected incident
+                  </small>
                 </div>
 
                 <div className="chain-arrow">
@@ -468,7 +828,9 @@ ${log}
                   <strong>
                     {result.errorType}
                   </strong>
-                  <small>Error detected</small>
+                  <small>
+                    Error detected
+                  </small>
                 </div>
 
                 <div className="chain-arrow">
@@ -491,22 +853,18 @@ ${log}
 
                 <div className="chain-item">
                   <span>🛠️</span>
-                  <strong>Fix</strong>
+                  <strong>
+                    Fix
+                  </strong>
                   <small>
                     {result.suggestedFix}
                   </small>
                 </div>
-
               </div>
-
             </div>
 
-            {/* ================= MAIN RESULT GRID ================= */}
-
             <div className="grid">
-
               <article className="result-box wide">
-
                 <h3>
                   🔍 Possible Root Cause
                 </h3>
@@ -514,11 +872,9 @@ ${log}
                 <p>
                   {result.possibleRootCause}
                 </p>
-
               </article>
 
               <article className="result-box">
-
                 <h3>
                   🛠️ Suggested Fix
                 </h3>
@@ -526,11 +882,9 @@ ${log}
                 <p>
                   {result.suggestedFix}
                 </p>
-
               </article>
 
               <article className="result-box">
-
                 <h3>
                   📋 Incident Summary
                 </h3>
@@ -538,40 +892,29 @@ ${log}
                 <p>
                   {result.incidentSummary}
                 </p>
-
               </article>
 
-              {/* Troubleshooting */}
-
               <article className="result-box wide">
-
                 <h3>
                   🔧 Troubleshooting Steps
                 </h3>
 
                 {steps.length > 0 ? (
                   <ol className="steps">
-                    {steps.map(
-                      (step, index) => (
-                        <li key={index}>
-                          {step}
-                        </li>
-                      )
-                    )}
+                    {steps.map((step, index) => (
+                      <li key={index}>
+                        {step}
+                      </li>
+                    ))}
                   </ol>
                 ) : (
                   <p>
-                    No troubleshooting steps
-                    available.
+                    No troubleshooting steps available.
                   </p>
                 )}
-
               </article>
 
-              {/* Impact */}
-
               <article className="result-box">
-
                 <h3>
                   ⚠️ Impact
                 </h3>
@@ -580,42 +923,30 @@ ${log}
                   {result.impact ||
                     "Impact information is not available."}
                 </p>
-
               </article>
 
-              {/* Prevention */}
-
               <article className="result-box">
-
                 <h3>
                   🛡️ Prevention
                 </h3>
 
                 {prevention.length > 0 ? (
                   <ul className="prevention">
-                    {prevention.map(
-                      (item, index) => (
-                        <li key={index}>
-                          {item}
-                        </li>
-                      )
-                    )}
+                    {prevention.map((item, index) => (
+                      <li key={index}>
+                        {item}
+                      </li>
+                    ))}
                   </ul>
                 ) : (
                   <p>
-                    No prevention recommendations
-                    available.
+                    No prevention recommendations available.
                   </p>
                 )}
-
               </article>
-
             </div>
 
-            {/* ================= REPORT ACTIONS ================= */}
-
             <div className="report-actions">
-
               <button
                 className="secondary"
                 onClick={copyReport}
@@ -631,28 +962,19 @@ ${log}
               >
                 ⬇️ Download Report
               </button>
-
             </div>
-
-            {/* Analysis mode */}
 
             <div className="mode">
               Analysis mode:{" "}
               <strong>
-                {result.analysisMode ||
-                  "LOCAL AI"}
+                {result.analysisMode || "LOCAL AI"}
               </strong>
             </div>
-
           </section>
         )}
 
-        {/* ================= SEVERITY DASHBOARD ================= */}
-
         <section className="panel">
-
           <div className="panel-title">
-
             <div>
               <h2>
                 Incident Dashboard
@@ -663,56 +985,63 @@ ${log}
                 incidents stored in this browser.
               </p>
             </div>
-
           </div>
 
           <div className="dashboard-grid">
-
             <div className="dashboard-card">
-              <span>All Incidents</span>
+              <span>
+                All Incidents
+              </span>
+
               <strong>
                 {history.length}
               </strong>
             </div>
 
             <div className="dashboard-card">
-              <span>Critical</span>
+              <span>
+                Critical
+              </span>
+
               <strong>
                 {severityStats.CRITICAL}
               </strong>
             </div>
 
             <div className="dashboard-card">
-              <span>High</span>
+              <span>
+                High
+              </span>
+
               <strong>
                 {severityStats.HIGH}
               </strong>
             </div>
 
             <div className="dashboard-card">
-              <span>Medium</span>
+              <span>
+                Medium
+              </span>
+
               <strong>
                 {severityStats.MEDIUM}
               </strong>
             </div>
 
             <div className="dashboard-card">
-              <span>Low</span>
+              <span>
+                Low
+              </span>
+
               <strong>
                 {severityStats.LOW}
               </strong>
             </div>
-
           </div>
-
         </section>
 
-        {/* ================= HISTORY ================= */}
-
         <section className="panel">
-
           <div className="panel-title">
-
             <div>
               <h2>
                 Incident History
@@ -732,11 +1061,9 @@ ${log}
                 Clear History
               </button>
             )}
-
           </div>
 
           {history.length === 0 ? (
-
             <div className="empty-history">
               <div className="empty-icon">
                 🕘
@@ -751,36 +1078,30 @@ ${log}
                 and it will appear here.
               </p>
             </div>
-
           ) : (
-
             <div className="history-list">
-
               {history.map((item) => (
-
                 <div
                   className="history-item"
                   key={item.id}
                 >
-
                   <div className="history-info">
-
                     <div className="history-top">
-
                       <strong>
                         {item.result?.errorType ||
                           "Application Error"}
                       </strong>
 
                       <span
-                        className={`severity-small ${String(
-                          item.result?.severity ||
-                            ""
-                        ).toLowerCase()}`}
+                        className={
+                          "severity-small " +
+                          String(
+                            item.result?.severity || ""
+                          ).toLowerCase()
+                        }
                       >
                         {item.result?.severity}
                       </span>
-
                     </div>
 
                     <small>
@@ -790,7 +1111,6 @@ ${log}
                     <p>
                       {item.result?.incidentSummary}
                     </p>
-
                   </div>
 
                   <button
@@ -801,25 +1121,28 @@ ${log}
                   >
                     View
                   </button>
-
                 </div>
-
               ))}
-
             </div>
-
           )}
-
         </section>
 
-        {/* ================= TECHNOLOGY ================= */}
-
         <section className="technology">
+          <div>
+            <strong>
+              ✦ Alexa+ Experience
+            </strong>
+
+            <span>
+              Conversational Web Simulation
+            </span>
+          </div>
 
           <div>
             <strong>
               🧠 Local AI
             </strong>
+
             <span>
               Ollama + Llama 3.2
             </span>
@@ -829,6 +1152,7 @@ ${log}
             <strong>
               ⚙️ Backend
             </strong>
+
             <span>
               Spring Boot
             </span>
@@ -838,8 +1162,9 @@ ${log}
             <strong>
               🔗 MCP
             </strong>
+
             <span>
-              Model Context Protocol
+              Streamable HTTP
             </span>
           </div>
 
@@ -847,22 +1172,21 @@ ${log}
             <strong>
               ⚛️ Frontend
             </strong>
+
             <span>
               React + Vite
             </span>
           </div>
-
         </section>
-
       </main>
 
       <footer>
-        DevOps Copilot • Spring Boot + React +
+        DevOps Copilot • React + Spring Boot +
         Ollama + MCP
       </footer>
-
     </div>
   );
 }
 
 export default App;
+
